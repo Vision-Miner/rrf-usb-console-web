@@ -138,7 +138,7 @@ async function flash() {
       bar.max = total;
       bar.value = done;
       note.textContent = `${stage}…`;
-    });
+    }, log);
     note.textContent = `Flashed ${file.name} to ${result.chip} (${result.pages} pages, verified). The board is restarting; power-cycle it if the console does not come back.`;
     log(`--- flashed and verified, ${result.chip} ---`);
     reconnect = true;

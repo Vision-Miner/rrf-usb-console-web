@@ -19,7 +19,6 @@ const CHIPS = {
 
 const FLASH_ADDR = 0x00400000;
 const PAGE = 512;
-const WRITE_CHUNK = 256;
 const RAM_ADDR = 0x20400000;
 const RAM_SIZE = 0x60000;
 const APPLET_ADDR = 0x20401000;
@@ -46,6 +45,21 @@ const APPLET = {
 const BUFFER_A = (APPLET_ADDR + APPLET.code.length + 3) & ~3;
 const BUFFER_B = BUFFER_A + PAGE;
 
+// "byte 511: expected 3A, got 57 (1 of 512 differ)" or null when equal.
+function describeDiff(want, got) {
+  let first = -1;
+  let count = 0;
+  for (let i = 0; i < want.length; i++) {
+    if (want[i] !== got[i]) {
+      if (first < 0) first = i;
+      count++;
+    }
+  }
+  if (first < 0) return null;
+  const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, '0');
+  return `byte ${first}: expected ${hex2(want[first])}, got ${hex2(got[first])} (${count} of ${want.length} differ)`;
+}
+
 const hex8 = (n) => (n >>> 0).toString(16).toUpperCase().padStart(8, '0');
 const ascii = (s) => new TextEncoder().encode(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,6 +67,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export class Samba {
   constructor(port) {
     this.port = port;
+    this.writeChunk = 256;                            // data bytes per S command
+    this.readChunk = 512;                             // data bytes per R command
   }
 
   async init() {
@@ -86,8 +102,8 @@ export class Samba {
   // The ROM misreads a command and its data in one packet, and macOS has been seen to deliver at most
   // 384 bytes of a larger write (BOSSA issue 106), so the data goes in small separately flushed pieces.
   async write(addr, data) {
-    for (let pos = 0; pos < data.length; pos += WRITE_CHUNK) {
-      const part = data.subarray(pos, pos + WRITE_CHUNK);
+    for (let pos = 0; pos < data.length; pos += this.writeChunk) {
+      const part = data.subarray(pos, pos + this.writeChunk);
       await this.port.write(ascii(`S${hex8(addr + pos)},${hex8(part.length)}#`));
       await this.port.settle();
       await this.port.write(part);
@@ -97,14 +113,78 @@ export class Samba {
 
   async read(addr, size) {
     const out = new Uint8Array(size);
-    let pos = 0;
-    // The ROM fails USB reads whose size is a power of two above 32: take the first byte separately.
-    if (size > 32 && (size & (size - 1)) === 0) {
-      out[pos++] = await this.readByte(addr);
+    for (let pos = 0; pos < size;) {
+      let n = Math.min(this.readChunk, size - pos);
+      // The ROM fails USB reads whose size is a power of two above 32: take the first byte separately.
+      if (n > 32 && (n & (n - 1)) === 0) {
+        out[pos++] = await this.readByte(addr + pos - 1);
+        n--;
+      }
+      await this.port.write(ascii(`R${hex8(addr + pos)},${hex8(n)}#`));
+      out.set(await this.port.read(n, 2000), pos);
+      pos += n;
     }
-    await this.port.write(ascii(`R${hex8(addr + pos)},${hex8(size - pos)}#`));
-    out.set(await this.port.read(size - pos, 2000), pos);
     return out;
+  }
+
+  // After a failed transfer the bootloader may still be waiting for data bytes. Feed it bytes that are
+  // harmless both as data and as command text, then check that it answers again.
+  async #resync() {
+    for (let i = 0; i < 20; i++) {
+      await this.port.write(new Uint8Array(32));
+      await this.port.settle();
+    }
+    for (let i = 0; i < 3; i++) {
+      await this.port.drain(200);
+      try {
+        if (((await this.readWord(0xe000ed00)) & 0xfff0) === 0xc270) return;
+      } catch {
+        // no answer yet
+      }
+    }
+    throw new SambaError('Link test failed and the bootloader stopped answering. Nothing was erased; power-cycle the board and try again.');
+  }
+
+  // Find piece sizes that this host's USB stack carries intact, touching bootloader RAM only.
+  // Word reads are the reference: chip detection already depends on them.
+  async calibrate(addr, log) {
+    const size = 512;
+    const tries = 3;
+    let pattern;
+    const attempt = async (check) => {
+      try {
+        for (let i = 0; i < tries; i++) {
+          const bad = await check();
+          if (bad) return bad;
+        }
+        return null;
+      } catch (e) {
+        await this.port.drain(300);                   // let a confused bootloader run out of input
+        return e.message;
+      }
+    };
+    const pick = async (what, sizes, set, check) => {
+      for (const chunk of sizes) {
+        set(chunk);
+        const bad = await attempt(check);
+        if (!bad) return;
+        log(`link test: ${what} in ${chunk} byte pieces fails: ${bad}`);
+        await this.#resync();
+      }
+      throw new SambaError(`Link test failed: ${what} the bootloader's memory does not work on this computer. Nothing was erased.`);
+    };
+
+    await pick('writing', [256, 128, 64, 32], (n) => (this.writeChunk = n), async () => {
+      // No '#': if the bootloader loses track, stray pattern bytes can never complete a command.
+      pattern = Uint8Array.from({ length: size }, () => (Math.floor(Math.random() * 255) + 0x24) & 0xff);
+      await this.write(addr, pattern);
+      const got = new Uint8Array(size);
+      for (let i = 0; i < size; i += 4) new DataView(got.buffer).setUint32(i, await this.readWord(addr + i), true);
+      return describeDiff(pattern, got);
+    });
+    await pick('reading', [512, 256, 128, 64, 32], (n) => (this.readChunk = n), async () =>
+      describeDiff(pattern, await this.read(addr, size)));
+    log(`link test passed: write pieces ${this.writeChunk}, read pieces ${this.readChunk}`);
   }
 
   async go(addr) {
@@ -119,8 +199,8 @@ export class Same70Flash {
     this.onBufferA = true;
   }
 
-  // Identify the chip the way BOSSA's Device::create does, then load the applet.
-  async init() {
+  // Identify the chip the way BOSSA's Device::create does.
+  async identify() {
     const s = this.samba;
     if (((await s.readWord(0x0)) & 0xff000000) === 0xea000000) throw new SambaError('This is an ARM7 device, not a SAM E70');
     const cpu = (await s.readWord(0xe000ed00)) & 0xfff0;
@@ -131,7 +211,10 @@ export class Same70Flash {
     if (!chip) throw new SambaError(`Unsupported chip, CHIPID 0x${hex8(id)}`);
     [this.name, this.pages, this.lockRegions] = chip;
     this.size = this.pages * PAGE;
+  }
 
+  async loadApplet() {
+    const s = this.samba;
     await s.write(APPLET_ADDR, APPLET.code);
     await s.writeWord(APPLET_ADDR + APPLET.words, PAGE / 4);
     await s.writeWord(APPLET_ADDR + APPLET.stack, APPLET_STACK);
@@ -239,12 +322,15 @@ export function checkImage(image, flashSize) {
 
 // Unlock, erase, write, verify, select boot from flash, reset (bossac -u -e -w -v -b -R).
 // The boot bit is set only after the whole image has verified, so a failure leaves the board in the bootloader.
-export async function flashFirmware(port, image, onProgress = () => {}) {
+export async function flashFirmware(port, image, onProgress = () => {}, log = () => {}) {
   const samba = new Samba(port);
   await samba.init();
   const flash = new Same70Flash(samba);
-  await flash.init();
+  await flash.identify();
   checkImage(image, flash.size);
+  onProgress('Testing link', 0, 1);
+  await samba.calibrate(BUFFER_A, log);
+  await flash.loadApplet();
 
   const pages = Math.ceil(image.length / PAGE);
   const pageData = (n) => {
@@ -264,13 +350,16 @@ export async function flashFirmware(port, image, onProgress = () => {}) {
   for (let n = 0; n < pages; n++) {
     onProgress('Verifying', n, pages);
     const want = pageData(n);
-    const got = await flash.readPage(n);
-    for (let i = 0; i < PAGE; i++) {
-      if (got[i] !== want[i]) throw new SambaError(`Verify failed at 0x${hex8(FLASH_ADDR + n * PAGE + i)}; the board stays in the bootloader, flash again`);
+    let bad = describeDiff(want, await flash.readPage(n));
+    if (bad) {
+      log(`verify: page ${n} (0x${hex8(FLASH_ADDR + n * PAGE)}) ${bad}; reading it again`);
+      bad = describeDiff(want, await flash.readPage(n));
+      if (bad) throw new SambaError(`Verify failed in page ${n} at 0x${hex8(FLASH_ADDR + n * PAGE)}, ${bad}; the board stays in the bootloader, flash again`);
+      log(`verify: page ${n} matched on the second read`);
     }
   }
   onProgress('Finishing', 1, 1);
   await flash.setBootFlash();
   await flash.reset();
-  return { chip: flash.name, version: samba.version, pages };
+  return { chip: flash.name, version: samba.version, pages, writeChunk: samba.writeChunk, readChunk: samba.readChunk };
 }

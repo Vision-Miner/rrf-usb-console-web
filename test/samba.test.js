@@ -23,7 +23,7 @@ test('flashes, verifies, selects boot from flash and resets', async () => {
   assert.ok(fake.flash.subarray(image.length).every((b) => b === 0xff), 'rest of the flash is erased');
   assert.equal(fake.gpnvm, 0b10);
   assert.equal(fake.resetRequested, true);
-  assert.deepEqual([...stages], ['Unlocking', 'Erasing', 'Writing', 'Verifying', 'Finishing']);
+  assert.deepEqual([...stages], ['Testing link', 'Unlocking', 'Erasing', 'Writing', 'Verifying', 'Finishing']);
 });
 
 test('a page-aligned image is written whole', async () => {
@@ -44,7 +44,7 @@ test('locked regions are unlocked first', async () => {
 test('a programming fault fails verification and leaves the board in the bootloader', async () => {
   const fake = new FakeSamba();
   fake.corruptPage = 5;
-  await assert.rejects(flashFirmware(fakePort(fake), makeImage(9000)), /Verify failed at 0x00400A07/);
+  await assert.rejects(flashFirmware(fakePort(fake), makeImage(9000)), /Verify failed in page 5 at 0x00400A00, byte 7: .* \(1 of 512 differ\)/);
   assert.equal(fake.gpnvm, 0);
   assert.equal(fake.resetRequested, false);
 });
@@ -62,4 +62,41 @@ test('a file that is not SAM E70 firmware is refused before anything is erased',
   await assert.rejects(flashFirmware(fakePort(fake), image), /stack pointer/);
   assert.ok(fake.flash.every((b) => b === 0x5a));
   assert.throws(() => checkImage(makeImage(2 * 1024 * 1024), 1024 * 1024), /larger than the flash/);
+});
+
+test('a host that truncates large writes gets smaller pieces and still flashes', async () => {
+  const fake = new FakeSamba();
+  const port = fakePort(fake);
+  const write = port.write;
+  port.write = (bytes) => write(bytes.length > 200 ? bytes.subarray(0, 200) : bytes);    // only 200 bytes of a write arrive
+  const image = makeImage(9000);
+  const notes = [];
+  const result = await flashFirmware(port, image, () => {}, (line) => notes.push(line));
+  assert.equal(result.writeChunk, 128);
+  assert.deepEqual(fake.flash.subarray(0, image.length), image);
+  assert.match(notes[0], /writing in 256 byte pieces fails/);
+});
+
+test('a host that damages the end of large replies gets smaller reads and still flashes', async () => {
+  const fake = new FakeSamba();
+  const port = fakePort(fake);
+  const read = port.read;
+  port.read = async (n, t) => {
+    const bytes = await read(n, t);
+    if (n > 300) bytes[n - 1] ^= 0xff;
+    return bytes;
+  };
+  const image = makeImage(9000);
+  const result = await flashFirmware(port, image);
+  assert.equal(result.readChunk, 256);
+  assert.deepEqual(fake.flash.subarray(0, image.length), image);
+});
+
+test('a link that cannot carry data at all stops before anything is erased', async () => {
+  const fake = new FakeSamba();
+  const port = fakePort(fake);
+  const write = port.write;
+  port.write = (bytes) => write(bytes.length > 24 ? bytes.subarray(0, 24) : bytes);
+  await assert.rejects(flashFirmware(port, makeImage(9000)), /Link test failed: writing .* Nothing was erased/);
+  assert.ok(fake.flash.every((b) => b === 0x5a));
 });

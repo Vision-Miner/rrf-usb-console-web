@@ -34,9 +34,10 @@ export class FakeSamba {
       }
       const ch = String.fromCharCode(b);
       if (ch !== '#') { this.text += ch; continue; }
-      const cmd = this.text;
+      // Like the ROM, take the last command letter and its arguments; anything before it is noise.
+      const cmd = this.text.match(/[NVwoWSRG][0-9A-Fa-f,]*$/)?.[0];
       this.text = '';
-      this.#run(cmd);
+      if (cmd) this.#run(cmd);
     }
   }
 
