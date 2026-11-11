@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RRF USB Console</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <header>
+    <h1>RRF USB Console</h1>
+    <button id="connect">Connect</button>
+    <span id="status">Not connected</span>
+  </header>
+
+  <p id="unsupported" hidden></p>
+
+  <section>
+    <h2>Console</h2>
+    <pre id="log"></pre>
+    <form id="send" class="row">
+      <input id="gcode" placeholder="G-code, e.g. M115" autocomplete="off" spellcheck="false">
+      <button>Send</button>
+    </form>
+    <div class="row">
+      <button id="export">Export .txt</button>
+      <button id="clear">Clear</button>
+      <span class="note" id="count"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Firmware recovery</h2>
+    <ol>
+      <li>Choose the mainboard firmware: <input type="file" id="image" accept=".bin"></li>
+      <li>Put the board into its ROM bootloader: fit the ERASE jumper and power-cycle, or
+        <button id="bootloader">Reboot to bootloader</button>
+        <span class="note">The board will not start its firmware again until step 3 has finished.</span></li>
+      <li>Flash it: <button id="flash">Flash</button></li>
+    </ol>
+    <progress id="progress" value="0" max="1" hidden></progress>
+    <p id="flash-status" class="note"></p>
+  </section>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

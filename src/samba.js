@@ -1,0 +1,269 @@
+// SAM-BA ROM bootloader client and EEFC flash programmer for the SAM E70, independent of the transport.
+// A port of the USB path of BOSSA 1.9.1 (Samba.cpp, EefcFlash.cpp, Flasher.cpp; BSD-3-Clause, ShumaTech):
+// the command order and the workarounds are kept as they are there.
+//
+// The port object supplies:
+//   write(Uint8Array)       send bytes
+//   settle()                make sure what was written leaves as its own USB packet (BOSSA's flush)
+//   read(n, timeoutMs)      resolve with exactly n bytes or reject
+//   drain(quietMs)          resolve with whatever arrives until the line stays quiet for quietMs
+
+export class SambaError extends Error {}
+
+// CHIPID_CIDR & 0x7fffffe0 -> [name, flash pages, lock regions]
+const CHIPS = {
+  0x210d0a00: ['ATSAME70x19', 1024, 32],
+  0x21020c00: ['ATSAME70x20', 2048, 64],
+  0x21020e00: ['ATSAME70x21', 4096, 128],
+};
+
+const FLASH_ADDR = 0x00400000;
+const PAGE = 512;
+const RAM_ADDR = 0x20400000;
+const RAM_SIZE = 0x60000;
+const APPLET_ADDR = 0x20401000;
+const APPLET_STACK = 0x20404000;
+const EEFC_FMR = 0x400e0c00;
+const EEFC_FCR = 0x400e0c04;
+const EEFC_FSR = 0x400e0c08;
+const EEFC_FRR = 0x400e0c0c;
+const AIRCR = 0xe000ed0c;
+
+const FCMD = { WP: 0x1, EA: 0x5, CLB: 0x9, GLB: 0xa, SGPB: 0xb, GGPB: 0xd };
+const GPNVM_BOOT = 1;
+
+// BOSSA's word copy applet (WordCopyArm.cpp): copies `words` 32-bit words from src to dst.
+const APPLET = {
+  start: 0x00, stack: 0x20, reset: 0x24, dst: 0x28, src: 0x2c, words: 0x30,
+  code: new Uint8Array([
+    0x09, 0x48, 0x0a, 0x49, 0x0a, 0x4a, 0x02, 0xe0, 0x08, 0xc9, 0x08, 0xc0, 0x01, 0x3a, 0x00, 0x2a,
+    0xfa, 0xd1, 0x04, 0x48, 0x00, 0x28, 0x01, 0xd1, 0x01, 0x48, 0x85, 0x46, 0x70, 0x47, 0xc0, 0x46,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+  ]),
+};
+const BUFFER_A = (APPLET_ADDR + APPLET.code.length + 3) & ~3;
+const BUFFER_B = BUFFER_A + PAGE;
+
+const hex8 = (n) => (n >>> 0).toString(16).toUpperCase().padStart(8, '0');
+const ascii = (s) => new TextEncoder().encode(s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export class Samba {
+  constructor(port) {
+    this.port = port;
+  }
+
+  async init() {
+    await this.port.drain(100);                       // flush garbage
+    await this.port.write(ascii('N#'));               // binary mode
+    await this.port.drain(100);                       // "\n\r"; like BOSSA, not required
+    await this.port.write(ascii('V#'));
+    const reply = await this.port.drain(200);
+    let end = 0;
+    while (end < reply.length && reply[end] >= 0x20 && reply[end] < 0x7f) end++;
+    if (end === 0) throw new SambaError('The bootloader did not report a version');
+    this.version = new TextDecoder().decode(reply.subarray(0, end));
+  }
+
+  async writeWord(addr, value) {
+    await this.port.write(ascii(`W${hex8(addr)},${hex8(value)}#`));
+    await this.port.settle();
+  }
+
+  async readWord(addr) {
+    await this.port.write(ascii(`w${hex8(addr)},4#`));
+    const b = await this.port.read(4, 1000);
+    return (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0;
+  }
+
+  async readByte(addr) {
+    await this.port.write(ascii(`o${hex8(addr)},4#`));
+    return (await this.port.read(1, 1000))[0];
+  }
+
+  async write(addr, data) {
+    await this.port.write(ascii(`S${hex8(addr)},${hex8(data.length)}#`));
+    await this.port.settle();                         // the ROM misreads a command and its data in one packet
+    await this.port.write(data);
+  }
+
+  async read(addr, size) {
+    const out = new Uint8Array(size);
+    let pos = 0;
+    // The ROM fails USB reads whose size is a power of two above 32: take the first byte separately.
+    if (size > 32 && (size & (size - 1)) === 0) {
+      out[pos++] = await this.readByte(addr);
+    }
+    await this.port.write(ascii(`R${hex8(addr + pos)},${hex8(size - pos)}#`));
+    out.set(await this.port.read(size - pos, 2000), pos);
+    return out;
+  }
+
+  async go(addr) {
+    await this.port.write(ascii(`G${hex8(addr)}#`));
+    await this.port.settle();
+  }
+}
+
+export class Same70Flash {
+  constructor(samba) {
+    this.samba = samba;
+    this.onBufferA = true;
+  }
+
+  // Identify the chip the way BOSSA's Device::create does, then load the applet.
+  async init() {
+    const s = this.samba;
+    if (((await s.readWord(0x0)) & 0xff000000) === 0xea000000) throw new SambaError('This is an ARM7 device, not a SAM E70');
+    const cpu = (await s.readWord(0xe000ed00)) & 0xfff0;
+    if (cpu !== 0xc270) throw new SambaError(`This is not a Cortex-M7 device (CPUID part 0x${cpu.toString(16)})`);
+    let id = await s.readWord(0x400e0740);
+    if (id === 0) id = await s.readWord(0x400e0940);
+    const chip = CHIPS[id & 0x7fffffe0];
+    if (!chip) throw new SambaError(`Unsupported chip, CHIPID 0x${hex8(id)}`);
+    [this.name, this.pages, this.lockRegions] = chip;
+    this.size = this.pages * PAGE;
+
+    await s.write(APPLET_ADDR, APPLET.code);
+    await s.writeWord(APPLET_ADDR + APPLET.words, PAGE / 4);
+    await s.writeWord(APPLET_ADDR + APPLET.stack, APPLET_STACK);
+    await s.writeWord(EEFC_FMR, 0x6 << 8);
+  }
+
+  async #waitReady(seconds = 1) {
+    const deadline = Date.now() + seconds * 1000;
+    for (;;) {
+      const fsr = await this.samba.readWord(EEFC_FSR);
+      if (fsr & 0x2) throw new SambaError('Flash command error');
+      if (fsr & 0x4) throw new SambaError('Flash lock error');
+      if (fsr & 0x1) return;
+      if (Date.now() > deadline) throw new SambaError('Flash controller timeout');
+      await sleep(1);
+    }
+  }
+
+  #command(cmd, arg) {
+    return this.samba.writeWord(EEFC_FCR, ((0x5a << 24) | (arg << 8) | cmd) >>> 0);
+  }
+
+  // Run the applet through its vector table (BOSSA's Applet::runv).
+  async #copy(dst, src) {
+    const s = this.samba;
+    await s.writeWord(APPLET_ADDR + APPLET.dst, dst);
+    await s.writeWord(APPLET_ADDR + APPLET.src, src);
+    await this.#waitReady();
+    await s.writeWord(APPLET_ADDR + APPLET.reset, APPLET_ADDR + APPLET.start + 1);
+    await s.go(APPLET_ADDR + APPLET.stack);
+  }
+
+  async unlockAll() {
+    await this.#waitReady();
+    await this.#command(FCMD.GLB, 0);
+    await this.#waitReady();
+    const locked = [];
+    for (let base = 0; base < this.lockRegions; base += 32) {
+      const bits = await this.samba.readWord(EEFC_FRR);
+      for (let i = 0; i < 32 && base + i < this.lockRegions; i++) {
+        if (bits & (1 << i)) locked.push(base + i);
+      }
+    }
+    for (const region of locked) {
+      await this.#waitReady();
+      await this.#command(FCMD.CLB, (region * this.pages) / this.lockRegions);
+    }
+    return locked.length;
+  }
+
+  async eraseAll() {
+    await this.#waitReady();
+    await this.#command(FCMD.EA, 0);
+    await this.#waitReady(60);
+  }
+
+  // Program one erased page with exactly PAGE bytes.
+  async writePage(page, data) {
+    const buffer = this.onBufferA ? BUFFER_A : BUFFER_B;
+    this.onBufferA = !this.onBufferA;
+    await this.samba.write(buffer, data);
+    await this.#copy(FLASH_ADDR + page * PAGE, buffer);
+    await this.#command(FCMD.WP, page);
+  }
+
+  // The ROM returns zeros for direct flash reads, so copy the page to RAM and read it there.
+  async readPage(page) {
+    const buffer = this.onBufferA ? BUFFER_A : BUFFER_B;
+    await this.#copy(buffer, FLASH_ADDR + page * PAGE);
+    return this.samba.read(buffer, PAGE);
+  }
+
+  async getBootFlash() {
+    await this.#waitReady();
+    await this.#command(FCMD.GGPB, 0);
+    await this.#waitReady();
+    return ((await this.samba.readWord(EEFC_FRR)) & (1 << GPNVM_BOOT)) !== 0;
+  }
+
+  async setBootFlash() {
+    await this.#waitReady();
+    await this.#command(FCMD.SGPB, GPNVM_BOOT);
+    if (!(await this.getBootFlash())) throw new SambaError('The boot-from-flash bit did not set');
+  }
+
+  reset() {
+    return this.samba.writeWord(AIRCR, 0x05fa0004);
+  }
+}
+
+// Reject anything that is not a Cortex-M image linked for SAM E70 flash and RAM.
+export function checkImage(image, flashSize) {
+  if (image.length < 8) throw new SambaError('The file is too small to be firmware');
+  if (image.length > flashSize) throw new SambaError(`The file (${image.length} bytes) is larger than the flash (${flashSize} bytes)`);
+  const v = new DataView(image.buffer, image.byteOffset, 8);
+  const sp = v.getUint32(0, true);
+  const pc = v.getUint32(4, true);
+  if (sp <= RAM_ADDR || sp > RAM_ADDR + RAM_SIZE || sp % 4) {
+    throw new SambaError(`Not firmware for this board: initial stack pointer 0x${hex8(sp)} is outside its RAM`);
+  }
+  if (!(pc & 1) || pc < FLASH_ADDR || pc >= FLASH_ADDR + flashSize) {
+    throw new SambaError(`Not firmware for this board: reset vector 0x${hex8(pc)} is outside its flash`);
+  }
+}
+
+// Unlock, erase, write, verify, select boot from flash, reset (bossac -u -e -w -v -b -R).
+// The boot bit is set only after the whole image has verified, so a failure leaves the board in the bootloader.
+export async function flashFirmware(port, image, onProgress = () => {}) {
+  const samba = new Samba(port);
+  await samba.init();
+  const flash = new Same70Flash(samba);
+  await flash.init();
+  checkImage(image, flash.size);
+
+  const pages = Math.ceil(image.length / PAGE);
+  const pageData = (n) => {
+    const data = new Uint8Array(PAGE).fill(0xff);
+    data.set(image.subarray(n * PAGE, (n + 1) * PAGE));
+    return data;
+  };
+
+  onProgress('Unlocking', 0, 1);
+  await flash.unlockAll();
+  onProgress('Erasing', 0, 1);
+  await flash.eraseAll();
+  for (let n = 0; n < pages; n++) {
+    onProgress('Writing', n, pages);
+    await flash.writePage(n, pageData(n));
+  }
+  for (let n = 0; n < pages; n++) {
+    onProgress('Verifying', n, pages);
+    const want = pageData(n);
+    const got = await flash.readPage(n);
+    for (let i = 0; i < PAGE; i++) {
+      if (got[i] !== want[i]) throw new SambaError(`Verify failed at 0x${hex8(FLASH_ADDR + n * PAGE + i)}; the board stays in the bootloader, flash again`);
+    }
+  }
+  onProgress('Finishing', 1, 1);
+  await flash.setBootFlash();
+  await flash.reset();
+  return { chip: flash.name, version: samba.version, pages };
+}

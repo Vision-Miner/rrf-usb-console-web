@@ -1,0 +1,10 @@
+{
+  "name": "rrf-usb-console-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "serve": "python3 -m http.server 8000 --bind 0.0.0.0"
+  }
+}
