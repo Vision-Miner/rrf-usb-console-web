@@ -1,8 +1,8 @@
-import { SerialLink } from './serial.js';
+import { backend } from './serial.js';
 import { flashFirmware, checkImage } from './samba.js';
 
-const DUET3 = { usbVendorId: 0x1d50, usbProductId: 0x60ee };
-const SAMBA = { usbVendorId: 0x03eb, usbProductId: 0x6124 };
+const DUET3 = { vendorId: 0x1d50, productId: 0x60ee };
+const SAMBA = { vendorId: 0x03eb, productId: 0x6124 };
 const MAX_SHOWN = 5000;
 const $ = (id) => document.getElementById(id);
 
@@ -48,7 +48,7 @@ function onBytes(bytes) {
 }
 
 async function openConsole(port) {
-  const opened = await SerialLink.open(port, 115200, onBytes);
+  const opened = await backend.open(port, 115200, onBytes);
   link = opened;
   reconnect = true;
   $('connect').textContent = 'Disconnect';
@@ -67,11 +67,7 @@ async function openConsole(port) {
 // Reopen the console without a click when the browser still holds permission for the board.
 async function tryReconnect() {
   if (!reconnect || link || flashing) return;
-  const ports = await navigator.serial.getPorts();
-  const port = ports.find((p) => {
-    const info = p.getInfo();
-    return info.usbVendorId === DUET3.usbVendorId && info.usbProductId === DUET3.usbProductId;
-  });
+  const port = await backend.granted(DUET3);
   if (!port) return;
   try {
     await openConsole(port);
@@ -86,7 +82,10 @@ async function toggleConnection() {
     await link.close();
     return;
   }
-  const port = await navigator.serial.requestPort({ filters: [DUET3] });
+  const port = await backend.request(DUET3, SAMBA);
+  if (backend.is(port, SAMBA)) {
+    throw new Error('This board is in its ROM bootloader and has no console. Choose the firmware below and press Flash.');
+  }
   await openConsole(port);
 }
 
@@ -126,8 +125,8 @@ async function rebootToBootloader() {
 
 async function flash() {
   const { file, image } = await chosenImage();
-  const port = await navigator.serial.requestPort({ filters: [SAMBA] });
-  const boot = await SerialLink.open(port, 921600);
+  const port = await backend.request(SAMBA);
+  const boot = await backend.open(port, 921600);
   const bar = $('progress');
   const note = $('flash-status');
   flashing = true;
@@ -165,14 +164,14 @@ async function act(fn) {
   }
 }
 
-if (!('serial' in navigator)) {
+if (!backend) {
   $('unsupported').textContent = window.isSecureContext
-    ? 'This browser has no Web Serial API. Use desktop Chrome, Edge or Opera, or Firefox 151 or newer.'
-    : `Web Serial is blocked because this page was opened over plain HTTP at ${location.host}. Open it at http://localhost or over HTTPS.`;
+    ? 'This browser has neither Web Serial nor WebUSB. Use Chrome, Edge or Opera, or desktop Firefox 151 or newer.'
+    : `USB access is blocked because this page was opened over plain HTTP at ${location.host}. Open it at http://localhost or over HTTPS.`;
   $('unsupported').hidden = false;
   for (const id of ['connect', 'bootloader', 'flash']) $(id).disabled = true;
 } else {
-  navigator.serial.addEventListener('connect', () => act(tryReconnect));
+  backend.events.addEventListener('connect', () => act(tryReconnect));
   setInterval(() => act(tryReconnect), 1000);
   $('connect').onclick = () => act(toggleConnection);
   $('bootloader').onclick = () => act(rebootToBootloader);
