@@ -19,6 +19,7 @@ const CHIPS = {
 
 const FLASH_ADDR = 0x00400000;
 const PAGE = 512;
+const WRITE_CHUNK = 256;
 const RAM_ADDR = 0x20400000;
 const RAM_SIZE = 0x60000;
 const APPLET_ADDR = 0x20401000;
@@ -82,10 +83,16 @@ export class Samba {
     return (await this.port.read(1, 1000))[0];
   }
 
+  // The ROM misreads a command and its data in one packet, and macOS has been seen to deliver at most
+  // 384 bytes of a larger write (BOSSA issue 106), so the data goes in small separately flushed pieces.
   async write(addr, data) {
-    await this.port.write(ascii(`S${hex8(addr)},${hex8(data.length)}#`));
-    await this.port.settle();                         // the ROM misreads a command and its data in one packet
-    await this.port.write(data);
+    for (let pos = 0; pos < data.length; pos += WRITE_CHUNK) {
+      const part = data.subarray(pos, pos + WRITE_CHUNK);
+      await this.port.write(ascii(`S${hex8(addr + pos)},${hex8(part.length)}#`));
+      await this.port.settle();
+      await this.port.write(part);
+      await this.port.settle();
+    }
   }
 
   async read(addr, size) {
