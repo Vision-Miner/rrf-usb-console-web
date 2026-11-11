@@ -85,9 +85,13 @@ class SerialLink extends Link {
     return this.writer.write(bytes);
   }
 
-  // Let the previous write leave as its own USB packet before the next one is queued.
-  settle() {
-    return sleep(1);
+  // write() resolves once the bytes are queued inside the browser, which may still hand two writes to
+  // the OS as one. Closing the stream drains it to the device; the port then offers a fresh stream.
+  async settle() {
+    const stream = this.port.writable;
+    await this.writer.close();
+    for (let i = 0; this.port.writable === stream && i < 100; i++) await sleep(1);
+    this.writer = this.port.writable.getWriter();
   }
 
   async close() {

@@ -4,7 +4,7 @@
 //
 // The port object supplies:
 //   write(Uint8Array)       send bytes
-//   settle()                make sure what was written leaves as its own USB packet (BOSSA's flush)
+//   settle()                resolve once everything written has left for the device (BOSSA's flush)
 //   read(n, timeoutMs)      resolve with exactly n bytes or reject
 //   drain(quietMs)          resolve with whatever arrives until the line stays quiet for quietMs
 
