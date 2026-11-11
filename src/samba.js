@@ -1,6 +1,38 @@
 // SAM-BA ROM bootloader client and EEFC flash programmer for the SAM E70, independent of the transport.
-// A port of the USB path of BOSSA 1.9.1 (Samba.cpp, EefcFlash.cpp, Flasher.cpp; BSD-3-Clause, ShumaTech):
-// the command order and the workarounds are kept as they are there.
+//
+// This file is a derived work: a JavaScript port of the USB path of BOSSA 1.9.1
+// (https://github.com/shumatech/BOSSA; Samba.cpp, EefcFlash.cpp, Flash.cpp, Applet.cpp, Device.cpp,
+// Flasher.cpp), with the word copy applet of WordCopyArm.cpp embedded unchanged. The command order and
+// the workarounds are kept as they are there. BOSSA is distributed under this license, which continues
+// to apply to the parts taken from it:
+//
+// Copyright (c) 2011-2018, ShumaTech
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the <organization> nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// The port and the additions to it (link test, piece sizes, image check) are
+// Copyright (c) 2026 Remenod and released under the MIT License, see LICENSE.
 //
 // The port object supplies:
 //   write(Uint8Array)       send bytes

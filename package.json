@@ -2,6 +2,7 @@
   "name": "rrf-usb-console-web",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT AND BSD-3-Clause",
   "type": "module",
   "scripts": {
     "test": "node --test test/",
