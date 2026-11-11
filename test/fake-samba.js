@@ -133,7 +133,7 @@ export class FakeSamba {
         if (this.locked.size) { this.fsr |= 4; break; }
         this.flash.fill(0xff);
         break;
-      case 0x9: this.locked.delete(region(arg)); break;       // CLB
+      case 0x9: if (!this.ignoreUnlock) this.locked.delete(region(arg)); break;   // CLB
       case 0xa:                                                // GLB
         this.frr = [];
         for (let base = 0; base < this.lockRegions; base += 32) {

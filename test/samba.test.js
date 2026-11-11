@@ -74,7 +74,7 @@ test('a host that truncates large writes gets smaller pieces and still flashes',
   const result = await flashFirmware(port, image, () => {}, (line) => notes.push(line));
   assert.equal(result.writeChunk, 128);
   assert.deepEqual(fake.flash.subarray(0, image.length), image);
-  assert.match(notes[0], /writing in 256 byte pieces fails/);
+  assert.ok(notes.some((l) => /writing in 256 byte pieces fails/.test(l)));
 });
 
 test('a host that damages the end of large replies gets smaller reads and still flashes', async () => {
@@ -99,4 +99,21 @@ test('a link that cannot carry data at all stops before anything is erased', asy
   port.write = (bytes) => write(bytes.length > 24 ? bytes.subarray(0, 24) : bytes);
   await assert.rejects(flashFirmware(port, makeImage(9000)), /Link test failed: writing .* Nothing was erased/);
   assert.ok(fake.flash.every((b) => b === 0x5a));
+});
+
+test('an error flag left in the flash controller by an earlier run is cleared, not reported', async () => {
+  const fake = new FakeSamba();
+  fake.fsr = 0x3;
+  const image = makeImage(9000);
+  const notes = [];
+  await flashFirmware(fakePort(fake), image, () => {}, (line) => notes.push(line));
+  assert.deepEqual(fake.flash.subarray(0, image.length), image);
+  assert.ok(notes.some((l) => /old error flags set \(status 0x00000003\)/.test(l)));
+});
+
+test('a rejected flash command is reported with the command, the status and the stage', async () => {
+  const fake = new FakeSamba();
+  fake.locked = new Set([2]);
+  fake.ignoreUnlock = true;
+  await assert.rejects(flashFirmware(fakePort(fake), makeImage(9000)), /Flash lock error \(after EA 0, status 0x00000005\) \(while erasing\)/);
 });

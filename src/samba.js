@@ -194,9 +194,11 @@ export class Samba {
 }
 
 export class Same70Flash {
-  constructor(samba) {
+  constructor(samba, log = () => {}) {
     this.samba = samba;
+    this.log = log;
     this.onBufferA = true;
+    this.last = 'no command';                         // the latest flash controller command, for error reports
   }
 
   // Identify the chip the way BOSSA's Device::create does.
@@ -219,14 +221,21 @@ export class Same70Flash {
     await s.writeWord(APPLET_ADDR + APPLET.words, PAGE / 4);
     await s.writeWord(APPLET_ADDR + APPLET.stack, APPLET_STACK);
     await s.writeWord(EEFC_FMR, 0x6 << 8);
+    // Error flags stay set until the status is read; one left by an earlier failed run is not ours.
+    const stale = await s.readWord(EEFC_FSR);
+    if (stale & 0xe) this.log(`flash controller had old error flags set (status 0x${hex8(stale)}), cleared`);
   }
 
   async #waitReady(seconds = 1) {
     const deadline = Date.now() + seconds * 1000;
     for (;;) {
       const fsr = await this.samba.readWord(EEFC_FSR);
-      if (fsr & 0x2) throw new SambaError('Flash command error');
-      if (fsr & 0x4) throw new SambaError('Flash lock error');
+      const where = `after ${this.last}, status 0x${hex8(fsr)}`;
+      if (fsr & 0x6) {
+        // Only the ready, error and ECC bits exist; with others set this was not a status word at all.
+        if (fsr & ~0x000f000f) throw new SambaError(`Lost sync with the bootloader (${where})`);
+        throw new SambaError(`Flash ${fsr & 0x2 ? 'command' : 'lock'} error (${where})`);
+      }
       if (fsr & 0x1) return;
       if (Date.now() > deadline) throw new SambaError('Flash controller timeout');
       await sleep(1);
@@ -234,6 +243,7 @@ export class Same70Flash {
   }
 
   #command(cmd, arg) {
+    this.last = `${Object.keys(FCMD).find((k) => FCMD[k] === cmd)} ${arg}`;
     return this.samba.writeWord(EEFC_FCR, ((0x5a << 24) | (arg << 8) | cmd) >>> 0);
   }
 
@@ -323,43 +333,55 @@ export function checkImage(image, flashSize) {
 // Unlock, erase, write, verify, select boot from flash, reset (bossac -u -e -w -v -b -R).
 // The boot bit is set only after the whole image has verified, so a failure leaves the board in the bootloader.
 export async function flashFirmware(port, image, onProgress = () => {}, log = () => {}) {
-  const samba = new Samba(port);
-  await samba.init();
-  const flash = new Same70Flash(samba);
-  await flash.identify();
-  checkImage(image, flash.size);
-  onProgress('Testing link', 0, 1);
-  await samba.calibrate(BUFFER_A, log);
-  await flash.loadApplet();
-
-  const pages = Math.ceil(image.length / PAGE);
-  const pageData = (n) => {
-    const data = new Uint8Array(PAGE).fill(0xff);
-    data.set(image.subarray(n * PAGE, (n + 1) * PAGE));
-    return data;
+  let stage = 'Connecting';
+  const progress = (name, done, total) => {
+    if (name !== stage) log(`flash: ${name.toLowerCase()}`);
+    stage = name;
+    onProgress(name, done, total);
   };
+  try {
+    const samba = new Samba(port);
+    await samba.init();
+    const flash = new Same70Flash(samba, log);
+    await flash.identify();
+    log(`flash: ${flash.name}, bootloader ${samba.version}, ${image.length} bytes`);
+    checkImage(image, flash.size);
+    progress('Testing link', 0, 1);
+    await samba.calibrate(BUFFER_A, log);
+    await flash.loadApplet();
 
-  onProgress('Unlocking', 0, 1);
-  await flash.unlockAll();
-  onProgress('Erasing', 0, 1);
-  await flash.eraseAll();
-  for (let n = 0; n < pages; n++) {
-    onProgress('Writing', n, pages);
-    await flash.writePage(n, pageData(n));
-  }
-  for (let n = 0; n < pages; n++) {
-    onProgress('Verifying', n, pages);
-    const want = pageData(n);
-    let bad = describeDiff(want, await flash.readPage(n));
-    if (bad) {
-      log(`verify: page ${n} (0x${hex8(FLASH_ADDR + n * PAGE)}) ${bad}; reading it again`);
-      bad = describeDiff(want, await flash.readPage(n));
-      if (bad) throw new SambaError(`Verify failed in page ${n} at 0x${hex8(FLASH_ADDR + n * PAGE)}, ${bad}; the board stays in the bootloader, flash again`);
-      log(`verify: page ${n} matched on the second read`);
+    const pages = Math.ceil(image.length / PAGE);
+    const pageData = (n) => {
+      const data = new Uint8Array(PAGE).fill(0xff);
+      data.set(image.subarray(n * PAGE, (n + 1) * PAGE));
+      return data;
+    };
+
+    progress('Unlocking', 0, 1);
+    await flash.unlockAll();
+    progress('Erasing', 0, 1);
+    await flash.eraseAll();
+    for (let n = 0; n < pages; n++) {
+      progress('Writing', n, pages);
+      await flash.writePage(n, pageData(n));
     }
+    for (let n = 0; n < pages; n++) {
+      progress('Verifying', n, pages);
+      const want = pageData(n);
+      let bad = describeDiff(want, await flash.readPage(n));
+      if (bad) {
+        log(`verify: page ${n} (0x${hex8(FLASH_ADDR + n * PAGE)}) ${bad}; reading it again`);
+        bad = describeDiff(want, await flash.readPage(n));
+        if (bad) throw new SambaError(`Verify failed in page ${n} at 0x${hex8(FLASH_ADDR + n * PAGE)}, ${bad}; the board stays in the bootloader, flash again`);
+        log(`verify: page ${n} matched on the second read`);
+      }
+    }
+    progress('Finishing', 1, 1);
+    await flash.setBootFlash();
+    await flash.reset();
+    return { chip: flash.name, version: samba.version, pages, writeChunk: samba.writeChunk, readChunk: samba.readChunk };
+  } catch (e) {
+    e.message = `${e.message} (while ${stage.toLowerCase()})`;
+    throw e;
   }
-  onProgress('Finishing', 1, 1);
-  await flash.setBootFlash();
-  await flash.reset();
-  return { chip: flash.name, version: samba.version, pages, writeChunk: samba.writeChunk, readChunk: samba.readChunk };
 }
