@@ -1,47 +1,81 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RRF USB Console</title>
-  <link rel="stylesheet" href="src/style.css">
-</head>
-<body>
-  <header>
-    <h1>RRF USB Console</h1>
-    <button id="connect">Connect</button>
-    <span id="status">Not connected</span>
-  </header>
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8" lang="en">
+        <link rel="stylesheet" href="./src/changedStyle.css">
+    </head>
+    <body style='background-color: #0F0F0F'>
+        <script type="module" src="./src/app.js"></script>
+        <script type="module" src="./src/samba.js"></script>
+        <script type="module" src="./src/serial.js"></script>
+        <div class="content">
+            
+            <div class="header">
+                <h1 style="color: #F5F5F5">RRF USB Console</h1>
+                <div class="connectButton marg">
+                    <img style="margin-left:0.8em" src="./src/images/idexStar.png" heigth="10" width="10"/><h2 style="margin-left:0.8em; padding-right: 0.5em" class="connect">Connect</h2>
+                </div>
+                <p class="connectionStatus marg">Not connected</p>
+            </div>
+            <p class="unsupported" hidden></p>
+            
+            <div class="consoleBlock">
+                <h2>Console</h2>
+                <div class="consoleInfo">
+                    <!-- TEST DATA -->
+                     <pre class="log"></pre>
+                </div>
+                <div class="inputInConsole">
+                    <div style="display:flex; width: 80%">
+                        <input class="terminalInput" placeholder="G-code, e. g. M115">
+                        </input>
+                        <div class="terminalSendButton" tabindex="0" role="button">
+                            <span class="terminalSendButtonText">→</span>
+                        </div>
+                    </div>
+                    <div class="terminalOptions">
+                        <div class="termOpSettings clear">
+                            <span class="terminalSendButtonText">Clear</span>
+                        </div>
+                        <div class="termOpSettings export">
+                            <span class="terminalSendButtonText">Export .txt</span>
+                        </div>
+                        <p class="count"></p>
+                    </div>
+                </div>
+                <p class="error" style="font-size: 0.8em; color: red"></p>
+            </div>
 
-  <p id="unsupported" hidden></p>
+            <div>
+                <h2>Firmware Recovery</h2>
+                <ol>
+                    <li>
+                        <div class="firmwareBlock">
+                            Choose the mainboard firmware: 
+                            <label class="custom-file-upload ">
+                                <input type="file" hidden class="image" accept=".bin">
+                                <span class="btn">Select file...</span>
+                            </label>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="firmwareBlock">
+                            <span>Put the board into its ROM bootloader: fit the ERASE jumper and power-cycle, click "Reboot or bootloader":</span>
+                            <div class="terminalSendButton bootloader" style="width: auto; padding-left: 0.5em; padding-right: 0.5em; margin-left: 3em;">Reboot or bootloader</div>
+                        </div>
+                        <span>The board will not start its firmware again until step 3 has finished.</span>
+                        <p class="flash-status" class="note"></p>
+                    </li>
+                    <li>
+                        <div class="firmwareBlock" style="width: 25%">
+                            <span>Flash it:</span>
+                            <div class="terminalSendButton flash"><span>Flash</span></div>
+                            <progress class="progress" value="0" max="1" hidden></progress>
+                        </div>
+                    </li>
+                </ol>
+            </div>
 
-  <section>
-    <h2>Console</h2>
-    <pre id="log"></pre>
-    <form id="send" class="row">
-      <input id="gcode" placeholder="G-code, e.g. M115" autocomplete="off" spellcheck="false">
-      <button>Send</button>
-    </form>
-    <div class="row">
-      <button id="export">Export .txt</button>
-      <button id="clear">Clear</button>
-      <span class="note" id="count"></span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Firmware recovery</h2>
-    <ol>
-      <li>Choose the mainboard firmware: <input type="file" id="image" accept=".bin"></li>
-      <li>Put the board into its ROM bootloader: fit the ERASE jumper and power-cycle, or
-        <button id="bootloader">Reboot to bootloader</button>
-        <span class="note">The board will not start its firmware again until step 3 has finished.</span></li>
-      <li>Flash it: <button id="flash">Flash</button></li>
-    </ol>
-    <progress id="progress" value="0" max="1" hidden></progress>
-    <p id="flash-status" class="note"></p>
-  </section>
-
-  <script type="module" src="src/app.js"></script>
-</body>
+        </div>
+    </body>
 </html>

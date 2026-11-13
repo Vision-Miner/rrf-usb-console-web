@@ -1,0 +1,214 @@
+/* FONT INSTALL */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../src/fonts/Inter-SemiBold.otf') format('opentype');
+}
+:root{
+    --heightTerminalElements: 2.5em;
+    --successful_: #29EC00;
+    --bad: #E62703;
+}
+body{
+    box-sizing: border-box;
+    font-family: 'Inter';
+    margin:0;
+    color: white;
+}
+.content{
+    display: flex;
+    padding: 1em;
+    margin-left: 3em;
+    flex-direction: column;
+}
+
+.header{
+    display:flex;
+    align-items: end;
+}
+
+.connectButton{
+    display: flex;
+    background-color: #1E1E1E;
+    width: 17em;
+    height: 3.5em;
+    justify-content: start;
+    align-items: center;
+    font-size: 0.8em;
+    border-radius: 1em;
+    box-shadow: 0px 0px 10px #8F2410;
+    transition: color 0.2s ease;
+}
+
+.marg{
+    margin:1.5em
+}
+.connectionStatus{
+    color: #E62703;
+    text-decoration: underline;
+    text-underline-offset: 4px;  
+}
+.bad{
+    color: var(--bad)
+}
+.successful{
+    color: var(--successful_)
+}
+
+.consoleBlock{
+    background-color: black;
+    display: flex;
+    flex-direction: column;
+    padding-left:2em;
+    padding-right:2em;
+    border-radius:1em;
+    padding-bottom: 5em
+}
+
+.consoleInfo{
+    background-color: #242424;
+    width:100%;
+    height: 15em;
+    max-height:20em;
+    overflow-y: auto;
+    padding-left:1em;
+    border-radius:1em;
+    scrollbar-width: auto;
+    scrollbar-color: #1b1b1b #e5e7eb00;
+    font-size: 1.3em;
+    position:relative;
+    overflow-y:auto;
+    max-height:15em;
+}
+.log{
+    width:auto;
+    white-space: pre-line;
+    max-height: 15em;
+    overflow-y:auto;
+
+}
+
+.inputInConsole{
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 2em;
+}
+
+.terminalInput{
+    display: flex;
+    background-color: #242424;
+    width:55%;
+    outline: none;
+    border:none;
+    color: white;
+    align-items: center;
+    height: var(--heightTerminalElements);
+    border-radius: 1em 0em 0em 1em;
+    font-weight: 700;
+    font-size: 1em;
+    padding-left:1em;
+    padding-top:0;
+    padding-bottom:0;
+    padding-right:2em;
+}
+.terminalInput::placeholder{
+    color: #5C5C5C;
+    font-weight: 700;
+    width: auto;
+}
+.terminalSendButton{
+    width: 10%;
+    height: var(--heightTerminalElements);
+    background-color: #1E1E1E;
+    border-radius: 0.5em;
+    transform: translateX(-20%);
+    display:flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #8F2410;
+    cursor:pointer;
+}
+.terminalSendButtonText{
+    font-size: 1.2em
+}
+
+.terminalOptions{
+    display: flex;
+    align-items: center;
+    height: var(--heightTerminalElements);
+}
+.termOpSettings{
+    height: var(--heightTerminalElements);
+    background-color: #1E1E1E;
+    border-radius: 0.8em 0.8em 0.8em 0.8em;
+    display:flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #8F2410;
+    margin-left:1em;
+    font-size:0.9em;
+    padding:1em;
+    padding-top:0.1em;
+    padding-bottom:0.1em;
+    cursor:pointer;
+    width: auto;
+}
+.export{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 7em
+}
+
+.custom-file-upload{
+    background-color: #1E1E1E;
+    border: 1px solid #8F2410;
+    display:flex;
+    height: 2em;
+    align-items: center;
+    justify-content: center;
+    margin-left:1em;
+    border-radius: 0.4em;
+    cursor:pointer;
+    width: auto;
+    padding:0.5em
+}
+
+.count{
+    white-space:nowrap;
+    margin-left: 0.5em
+}
+
+.flash{
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    width: 20%;
+    margin-left:1.5em;
+    padding:0.5em;
+}
+
+.firmwareBlock{
+    display:flex; 
+    align-items: center; 
+}
+/* hover and animation */
+
+.connectButton:hover,
+.custom-file-upload:hover,
+.terminalSendButton:hover,
+.termOpSettings:hover {
+    transition: color 0.2s ease;
+    color: #E62703;
+    background-color: #2E1915;
+    cursor: pointer;
+}
+
+.connectButton:active,
+.custom-file-upload:active,
+.terminalSendButton:active,
+.termOpSettings:active {
+    transition: color 0.2s ease;
+    color: #a71c00;
+}
